@@ -34,7 +34,7 @@ jobs:
         run: |
           git init hg-temp-git
           cd hg-temp-git
-          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git fetch origin
           git checkout -b mercurial-sync origin/mercurial-sync
           cd ..
