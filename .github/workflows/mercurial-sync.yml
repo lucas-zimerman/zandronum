@@ -1,0 +1,50 @@
+name: Daily Mercurial Sync
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install Mercurial
+        run: |
+          sudo apt update
+          sudo apt install -y mercurial git python3 python3-pip
+          pip3 install dulwich
+
+      - name: Checkout mercurial-sync branch
+        uses: actions/checkout@v3
+        with:
+          ref: mercurial-sync
+          fetch-depth: 0
+
+      - name: Clone upstream Mercurial repo
+        run: |
+          rm -rf upstream-hg
+          hg clone https://foss.heptapod.net/zandronum/zandronum-stable upstream-hg
+
+      - name: Fetch previous Git commits
+        run: |
+          git fetch origin mercurial-sync
+          git checkout mercurial-sync
+
+      - name: Convert Mercurial to Git
+        run: |
+          git init hg-temp-git
+          cd hg-temp-git
+          git remote add origin ../../
+          git fetch origin
+          git checkout -b mercurial-sync
+          cd ..
+          # Clone fast-export and run conversion
+          git clone https://github.com/frej/fast-export.git
+          cd fast-export
+          ./hg-fast-export.sh -r ../upstream-hg
+          cd ..
+
+      - name: Push converted commits
+        run: |
+          cd hg-temp-git
+          git push origin mercurial-sync --force
