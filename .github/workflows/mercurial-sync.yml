@@ -41,7 +41,12 @@ jobs:
           # Clone fast-export and run conversion
           git clone https://github.com/frej/fast-export.git
           cd hg-temp-git
-          ../fast-export/hg-fast-export.sh -r ../upstream-hg
+          ../fast-export/hg-fast-export.sh -r ../upstream-hg --force
+
+      - name: Optimize Git repository
+        run: |
+          cd hg-temp-git
+          git gc --aggressive --prune=now
 
       - name: Push converted commits
         run: |
