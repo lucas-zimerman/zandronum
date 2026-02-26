@@ -1,6 +1,8 @@
 name: Daily Mercurial Sync
 
 on:
+  schedule:
+    - cron: '0 0 */2 * *'
   workflow_dispatch:
 
 permissions:
