@@ -34,15 +34,14 @@ jobs:
         run: |
           git init hg-temp-git
           cd hg-temp-git
-          git remote add origin ../../
+          git remote add origin "https://github.com/${{ github.repository }}.git"
           git fetch origin
-          git checkout -b mercurial-sync
+          git checkout -b mercurial-sync origin/mercurial-sync
           cd ..
           # Clone fast-export and run conversion
           git clone https://github.com/frej/fast-export.git
-          cd fast-export
-          ./hg-fast-export.sh -r ../upstream-hg
-          cd ..
+          cd hg-temp-git
+          ../fast-export/hg-fast-export.sh -r ../upstream-hg
 
       - name: Push converted commits
         run: |
