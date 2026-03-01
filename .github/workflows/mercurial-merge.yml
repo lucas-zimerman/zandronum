@@ -1,0 +1,192 @@
+name: Mercurial PR Merge
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge-to-mercurial:
+    if: github.event.label.name == 'mercurial-merge'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mercurial git python3 python3-pip jq
+
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: |
+          git fetch origin ${{ github.event.pull_request.base.ref }}
+
+      - name: Get PR information
+        id: pr_info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_AUTHOR_LOGIN="${{ github.event.pull_request.user.login }}"
+
+          # Get author info from GitHub API (works for external contributors)
+          AUTHOR_INFO=$(gh api "users/${PR_AUTHOR_LOGIN}" --jq '{name: (.name // .login), email: .email}')
+          API_NAME=$(echo "${AUTHOR_INFO}" | jq -r '.name')
+          API_EMAIL=$(echo "${AUTHOR_INFO}" | jq -r '.email')
+
+          # Fallback to commit info if API doesn't have public email
+          if [ "${API_EMAIL}" = "null" ] || [ -z "${API_EMAIL}" ]; then
+            AUTHOR_EMAIL=$(git log origin/${{ github.event.pull_request.base.ref }}..${{ github.event.pull_request.head.sha }} --format='%ae' | head -1)
+          else
+            AUTHOR_EMAIL="${API_EMAIL}"
+          fi
+
+          # Use API name, fallback to commit author name
+          if [ "${API_NAME}" = "null" ] || [ -z "${API_NAME}" ]; then
+            AUTHOR_NAME=$(git log origin/${{ github.event.pull_request.base.ref }}..${{ github.event.pull_request.head.sha }} --format='%an' | head -1)
+          else
+            AUTHOR_NAME="${API_NAME}"
+          fi
+
+          # Get all unique co-authors from commits (excluding main author)
+          COAUTHORS=$(git log origin/${{ github.event.pull_request.base.ref }}..${{ github.event.pull_request.head.sha }} --format='%an <%ae>' | sort -u | grep -v "^${AUTHOR_NAME} <${AUTHOR_EMAIL}>$" | sed 's/^/Co-authored-by: /' || true)
+
+          # Also check for Co-authored-by in commit messages
+          COMMIT_COAUTHORS=$(git log origin/${{ github.event.pull_request.base.ref }}..${{ github.event.pull_request.head.sha }} --format='%b' | grep -i "^Co-authored-by:" | sort -u || true)
+
+          # Combine co-authors
+          ALL_COAUTHORS=$(printf '%s\n%s' "${COAUTHORS}" "${COMMIT_COAUTHORS}" | grep -v "^$" | sort -u || true)
+
+          # Use delimiter for multiline output
+          echo "author_name=${AUTHOR_NAME}" >> $GITHUB_OUTPUT
+          echo "author_email=${AUTHOR_EMAIL}" >> $GITHUB_OUTPUT
+
+          # Store multiline co-authors in a file
+          echo "${ALL_COAUTHORS}" > /tmp/coauthors.txt
+
+          # Escape PR title for shell usage
+          echo "${PR_TITLE}" > /tmp/pr_title.txt
+
+          echo "PR Title: ${PR_TITLE}"
+          echo "Author: ${AUTHOR_NAME} <${AUTHOR_EMAIL}>"
+          echo "Co-authors:"
+          cat /tmp/coauthors.txt
+
+      - name: Create squashed commit
+        id: squash
+        env:
+          AUTHOR_NAME: ${{ steps.pr_info.outputs.author_name }}
+          AUTHOR_EMAIL: ${{ steps.pr_info.outputs.author_email }}
+        run: |
+          git config user.name "${AUTHOR_NAME}"
+          git config user.email "${AUTHOR_EMAIL}"
+
+          # Create a new branch from base
+          git checkout origin/${{ github.event.pull_request.base.ref }}
+          git checkout -b squashed-branch
+
+          # Squash merge the PR commits
+          git merge --squash ${{ github.event.pull_request.head.sha }}
+
+          # Build commit message
+          PR_TITLE=$(cat /tmp/pr_title.txt)
+          COAUTHORS=$(cat /tmp/coauthors.txt)
+
+          if [ -n "${COAUTHORS}" ]; then
+            printf '%s\n\n%s\n' "${PR_TITLE}" "${COAUTHORS}" > /tmp/commit_msg.txt
+          else
+            echo "${PR_TITLE}" > /tmp/commit_msg.txt
+          fi
+
+          # Commit with the squashed changes
+          git commit -F /tmp/commit_msg.txt
+
+          # Get the squashed commit hash
+          SQUASH_COMMIT=$(git rev-parse HEAD)
+          echo "squash_commit=${SQUASH_COMMIT}" >> $GITHUB_OUTPUT
+
+          echo "Squashed commit: ${SQUASH_COMMIT}"
+          git log -1 --format=full
+
+      - name: Clone upstream Mercurial repo
+        run: |
+          hg clone https://foss.heptapod.net/zandronum/zandronum-stable upstream-hg
+
+      - name: Export and apply commit to Mercurial
+        id: hg_commit
+        env:
+          AUTHOR_NAME: ${{ steps.pr_info.outputs.author_name }}
+          AUTHOR_EMAIL: ${{ steps.pr_info.outputs.author_email }}
+        run: |
+          # Export the squashed commit as a patch
+          git format-patch -1 --stdout ${{ steps.squash.outputs.squash_commit }} > /tmp/patch.patch
+
+          cd upstream-hg
+
+          # Configure Mercurial user
+          echo "[ui]" > ~/.hgrc
+          echo "username = ${AUTHOR_NAME} <${AUTHOR_EMAIL}>" >> ~/.hgrc
+
+          # Import the patch
+          hg import --no-commit /tmp/patch.patch || {
+            echo "Failed to apply patch cleanly"
+            exit 1
+          }
+
+          # Commit to Mercurial using the same message
+          hg commit -l /tmp/commit_msg.txt -u "${AUTHOR_NAME} <${AUTHOR_EMAIL}>"
+
+          echo "Mercurial commit created:"
+          hg log -l 1
+
+      - name: Push to Mercurial
+        env:
+          HG_USERNAME: ${{ secrets.HG_USERNAME }}
+          HG_PASSWORD: ${{ secrets.HG_PASSWORD }}
+        run: |
+          cd upstream-hg
+
+          # Configure authentication
+          echo "[auth]" >> ~/.hgrc
+          echo "heptapod.prefix = foss.heptapod.net" >> ~/.hgrc
+          echo "heptapod.username = ${HG_USERNAME}" >> ~/.hgrc
+          echo "heptapod.password = ${HG_PASSWORD}" >> ~/.hgrc
+
+          # Push to upstream
+          hg push || {
+            echo "Failed to push to Mercurial"
+            exit 1
+          }
+
+          echo "Successfully pushed to Mercurial!"
+
+      - name: Close PR on success
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr close ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --comment "This PR has been successfully merged to the upstream Mercurial repository."
+
+      - name: Remove label on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --remove-label "mercurial-merge"
+
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "Failed to merge to Mercurial. The 'mercurial-merge' label has been removed. Please check the workflow logs for details."
