@@ -1,0 +1,127 @@
+name: Sync PR to Mercurial
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [master]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-to-mercurial:
+    if: github.event.pull_request.merged == true && !contains(github.event.pull_request.labels.*.name, 'github-only')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install Mercurial
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mercurial
+
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get merge commit
+        id: commit_info
+        run: |
+          MERGE_COMMIT="${{ github.event.pull_request.merge_commit_sha }}"
+          echo "merge_commit=${MERGE_COMMIT}" >> $GITHUB_OUTPUT
+          echo "Merge commit: ${MERGE_COMMIT}"
+
+      - name: Create sync branch
+        env:
+          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "sync/${MERGE_COMMIT}"
+          git push origin "sync/${MERGE_COMMIT}"
+
+          echo "Created branch sync/${MERGE_COMMIT}"
+
+      - name: Remove commit from master
+        env:
+          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
+        run: |
+          git checkout master
+          git reset --hard HEAD~1
+          git push origin master --force
+
+          echo "Removed commit ${MERGE_COMMIT} from master"
+
+      - name: Clone upstream Mercurial repo
+        run: |
+          hg clone https://foss.heptapod.net/zandronum/zandronum-stable upstream-hg
+
+      - name: Export and apply commit to Mercurial
+        env:
+          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
+        run: |
+          git checkout "sync/${MERGE_COMMIT}"
+
+          # Get author info from the commit
+          AUTHOR_NAME=$(git log -1 ${MERGE_COMMIT} --format='%an')
+          AUTHOR_EMAIL=$(git log -1 ${MERGE_COMMIT} --format='%ae')
+
+          # Export the merge commit as a patch
+          git format-patch -1 --stdout ${MERGE_COMMIT} > /tmp/patch.patch
+
+          cd upstream-hg
+
+          # Configure Mercurial user
+          echo "[ui]" > ~/.hgrc
+          echo "username = ${AUTHOR_NAME} <${AUTHOR_EMAIL}>" >> ~/.hgrc
+
+          # Import the patch (includes commit message)
+          hg import /tmp/patch.patch || {
+            echo "Failed to apply patch"
+            exit 1
+          }
+
+          echo "Mercurial commit created:"
+          hg log -l 1
+
+      - name: Push to Mercurial
+        env:
+          HG_USERNAME: ${{ secrets.HG_USERNAME }}
+          HG_PASSWORD: ${{ secrets.HG_PASSWORD }}
+        run: |
+          cd upstream-hg
+
+          echo "[auth]" >> ~/.hgrc
+          echo "heptapod.prefix = foss.heptapod.net" >> ~/.hgrc
+          echo "heptapod.username = ${HG_USERNAME}" >> ~/.hgrc
+          echo "heptapod.password = ${HG_PASSWORD}" >> ~/.hgrc
+
+          hg push || {
+            echo "Failed to push to Mercurial"
+            exit 1
+          }
+
+          echo "Successfully pushed to Mercurial!"
+
+      - name: Delete sync branch on success
+        if: success()
+        env:
+          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
+        run: |
+          git push origin --delete "sync/${MERGE_COMMIT}"
+          echo "Deleted sync/${MERGE_COMMIT} branch"
+
+      - name: Restore commit to master on failure
+        if: failure()
+        env:
+          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
+        run: |
+          git checkout master
+          git reset --hard ${MERGE_COMMIT}
+          git push origin master --force
+
+          echo "Restored commit ${MERGE_COMMIT} to master due to failure"
