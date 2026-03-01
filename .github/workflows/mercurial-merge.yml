@@ -1,134 +1,77 @@
-name: Mercurial PR Merge
+name: Sync PR to Mercurial
 
 on:
   pull_request:
-    types: [labeled]
+    types: [closed]
+    branches: [master]
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
-  merge-to-mercurial:
-    if: github.event.label.name == 'mercurial-merge'
+  sync-to-mercurial:
+    if: github.event.pull_request.merged == true && !contains(github.event.pull_request.labels.*.name, 'github-only')
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install dependencies
+      - name: Install Mercurial
         run: |
           sudo apt-get update
-          sudo apt-get install -y mercurial git python3 python3-pip jq
+          sudo apt-get install -y mercurial
 
-      - name: Checkout PR
+      - name: Checkout master
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: master
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Fetch base branch
+      - name: Get merge commit
+        id: commit_info
         run: |
-          git fetch origin ${{ github.event.pull_request.base.ref }}
+          MERGE_COMMIT="${{ github.event.pull_request.merge_commit_sha }}"
+          echo "merge_commit=${MERGE_COMMIT}" >> $GITHUB_OUTPUT
+          echo "Merge commit: ${MERGE_COMMIT}"
 
-      - name: Get PR information
-        id: pr_info
+      - name: Create sync branch
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
         run: |
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          PR_AUTHOR_LOGIN="${{ github.event.pull_request.user.login }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Get author info from GitHub API (works for external contributors)
-          AUTHOR_INFO=$(gh api "users/${PR_AUTHOR_LOGIN}" --jq '{name: (.name // .login), email: .email}')
-          API_NAME=$(echo "${AUTHOR_INFO}" | jq -r '.name')
-          API_EMAIL=$(echo "${AUTHOR_INFO}" | jq -r '.email')
+          git checkout -b "sync/${MERGE_COMMIT}"
+          git push origin "sync/${MERGE_COMMIT}"
 
-          # Fallback to commit info if API doesn't have public email
-          if [ "${API_EMAIL}" = "null" ] || [ -z "${API_EMAIL}" ]; then
-            AUTHOR_EMAIL=$(git log origin/${{ github.event.pull_request.base.ref }}..${{ github.event.pull_request.head.sha }} --format='%ae' | head -1)
-          else
-            AUTHOR_EMAIL="${API_EMAIL}"
-          fi
+          echo "Created branch sync/${MERGE_COMMIT}"
 
-          # Use API name, fallback to commit author name
-          if [ "${API_NAME}" = "null" ] || [ -z "${API_NAME}" ]; then
-            AUTHOR_NAME=$(git log origin/${{ github.event.pull_request.base.ref }}..${{ github.event.pull_request.head.sha }} --format='%an' | head -1)
-          else
-            AUTHOR_NAME="${API_NAME}"
-          fi
-
-          # Get all unique co-authors from commits (excluding main author)
-          COAUTHORS=$(git log origin/${{ github.event.pull_request.base.ref }}..${{ github.event.pull_request.head.sha }} --format='%an <%ae>' | sort -u | grep -v "^${AUTHOR_NAME} <${AUTHOR_EMAIL}>$" | sed 's/^/Co-authored-by: /' || true)
-
-          # Also check for Co-authored-by in commit messages
-          COMMIT_COAUTHORS=$(git log origin/${{ github.event.pull_request.base.ref }}..${{ github.event.pull_request.head.sha }} --format='%b' | grep -i "^Co-authored-by:" | sort -u || true)
-
-          # Combine co-authors
-          ALL_COAUTHORS=$(printf '%s\n%s' "${COAUTHORS}" "${COMMIT_COAUTHORS}" | grep -v "^$" | sort -u || true)
-
-          # Use delimiter for multiline output
-          echo "author_name=${AUTHOR_NAME}" >> $GITHUB_OUTPUT
-          echo "author_email=${AUTHOR_EMAIL}" >> $GITHUB_OUTPUT
-
-          # Store multiline co-authors in a file
-          echo "${ALL_COAUTHORS}" > /tmp/coauthors.txt
-
-          # Escape PR title for shell usage
-          echo "${PR_TITLE}" > /tmp/pr_title.txt
-
-          echo "PR Title: ${PR_TITLE}"
-          echo "Author: ${AUTHOR_NAME} <${AUTHOR_EMAIL}>"
-          echo "Co-authors:"
-          cat /tmp/coauthors.txt
-
-      - name: Create squashed commit
-        id: squash
+      - name: Remove commit from master
         env:
-          AUTHOR_NAME: ${{ steps.pr_info.outputs.author_name }}
-          AUTHOR_EMAIL: ${{ steps.pr_info.outputs.author_email }}
+          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
         run: |
-          git config user.name "${AUTHOR_NAME}"
-          git config user.email "${AUTHOR_EMAIL}"
+          git checkout master
+          git reset --hard HEAD~1
+          git push origin master --force
 
-          # Create a new branch from base
-          git checkout origin/${{ github.event.pull_request.base.ref }}
-          git checkout -b squashed-branch
-
-          # Squash merge the PR commits
-          git merge --squash ${{ github.event.pull_request.head.sha }}
-
-          # Build commit message
-          PR_TITLE=$(cat /tmp/pr_title.txt)
-          COAUTHORS=$(cat /tmp/coauthors.txt)
-
-          if [ -n "${COAUTHORS}" ]; then
-            printf '%s\n\n%s\n' "${PR_TITLE}" "${COAUTHORS}" > /tmp/commit_msg.txt
-          else
-            echo "${PR_TITLE}" > /tmp/commit_msg.txt
-          fi
-
-          # Commit with the squashed changes
-          git commit -F /tmp/commit_msg.txt
-
-          # Get the squashed commit hash
-          SQUASH_COMMIT=$(git rev-parse HEAD)
-          echo "squash_commit=${SQUASH_COMMIT}" >> $GITHUB_OUTPUT
-
-          echo "Squashed commit: ${SQUASH_COMMIT}"
-          git log -1 --format=full
+          echo "Removed commit ${MERGE_COMMIT} from master"
 
       - name: Clone upstream Mercurial repo
         run: |
           hg clone https://foss.heptapod.net/zandronum/zandronum-stable upstream-hg
 
       - name: Export and apply commit to Mercurial
-        id: hg_commit
         env:
-          AUTHOR_NAME: ${{ steps.pr_info.outputs.author_name }}
-          AUTHOR_EMAIL: ${{ steps.pr_info.outputs.author_email }}
+          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
         run: |
-          # Export the squashed commit as a patch
-          git format-patch -1 --stdout ${{ steps.squash.outputs.squash_commit }} > /tmp/patch.patch
+          git checkout "sync/${MERGE_COMMIT}"
+
+          # Get author info from the commit
+          AUTHOR_NAME=$(git log -1 ${MERGE_COMMIT} --format='%an')
+          AUTHOR_EMAIL=$(git log -1 ${MERGE_COMMIT} --format='%ae')
+
+          # Export the merge commit as a patch
+          git format-patch -1 --stdout ${MERGE_COMMIT} > /tmp/patch.patch
 
           cd upstream-hg
 
@@ -136,14 +79,11 @@ jobs:
           echo "[ui]" > ~/.hgrc
           echo "username = ${AUTHOR_NAME} <${AUTHOR_EMAIL}>" >> ~/.hgrc
 
-          # Import the patch
-          hg import --no-commit /tmp/patch.patch || {
-            echo "Failed to apply patch cleanly"
+          # Import the patch (includes commit message)
+          hg import /tmp/patch.patch || {
+            echo "Failed to apply patch"
             exit 1
           }
-
-          # Commit to Mercurial using the same message
-          hg commit -l /tmp/commit_msg.txt -u "${AUTHOR_NAME} <${AUTHOR_EMAIL}>"
 
           echo "Mercurial commit created:"
           hg log -l 1
@@ -155,13 +95,11 @@ jobs:
         run: |
           cd upstream-hg
 
-          # Configure authentication
           echo "[auth]" >> ~/.hgrc
           echo "heptapod.prefix = foss.heptapod.net" >> ~/.hgrc
           echo "heptapod.username = ${HG_USERNAME}" >> ~/.hgrc
           echo "heptapod.password = ${HG_PASSWORD}" >> ~/.hgrc
 
-          # Push to upstream
           hg push || {
             echo "Failed to push to Mercurial"
             exit 1
@@ -169,24 +107,21 @@ jobs:
 
           echo "Successfully pushed to Mercurial!"
 
-      - name: Close PR on success
+      - name: Delete sync branch on success
         if: success()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
         run: |
-          gh pr close ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} \
-            --comment "This PR has been successfully merged to the upstream Mercurial repository."
+          git push origin --delete "sync/${MERGE_COMMIT}"
+          echo "Deleted sync/${MERGE_COMMIT} branch"
 
-      - name: Remove label on failure
+      - name: Restore commit to master on failure
         if: failure()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
         run: |
-          gh pr edit ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} \
-            --remove-label "mercurial-merge"
+          git checkout master
+          git reset --hard ${MERGE_COMMIT}
+          git push origin master --force
 
-          gh pr comment ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} \
-            --body "Failed to merge to Mercurial. The 'mercurial-merge' label has been removed. Please check the workflow logs for details."
+          echo "Restored commit ${MERGE_COMMIT} to master due to failure"
