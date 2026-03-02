@@ -1,4 +1,4 @@
-Welcome to Zandronum! *SYNC3*
+Welcome to Zandronum! *SYNC4*
 =====================
 
 A continuation of Skulltag.
