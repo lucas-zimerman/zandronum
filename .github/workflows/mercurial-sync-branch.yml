@@ -1,0 +1,38 @@
+name: Create Sync Branch
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  create-sync-branch:
+    if: |
+      github.event.pull_request.merged == false &&
+      contains(github.event.pull_request.labels.*.name, 'mercurial-label') &&
+      !contains(github.event.pull_request.labels.*.name, 'github-only')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Create sync branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          SHORT_SHA=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-7)
+          SYNC_BRANCH="sync/pr-${PR_NUMBER}-${SHORT_SHA}"
+
+          git checkout -b "${SYNC_BRANCH}"
+          git push origin "${SYNC_BRANCH}"
+
+          echo "Created branch ${SYNC_BRANCH}"

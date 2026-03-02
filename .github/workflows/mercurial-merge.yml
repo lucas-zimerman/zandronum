@@ -1,17 +1,15 @@
-name: Sync PR to Mercurial
+name: Sync to Mercurial
 
 on:
-  pull_request:
-    types: [closed]
-    branches: [master]
+  push:
+    branches:
+      - 'sync/**'
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   sync-to-mercurial:
-    if: github.event.pull_request.merged == true && !contains(github.event.pull_request.labels.*.name, 'github-only')
     runs-on: ubuntu-latest
 
     steps:
@@ -20,58 +18,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mercurial
 
-      - name: Checkout master
+      - name: Checkout sync branch
         uses: actions/checkout@v4
         with:
-          ref: master
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Get merge commit
-        id: commit_info
-        run: |
-          MERGE_COMMIT="${{ github.event.pull_request.merge_commit_sha }}"
-          echo "merge_commit=${MERGE_COMMIT}" >> $GITHUB_OUTPUT
-          echo "Merge commit: ${MERGE_COMMIT}"
-
-      - name: Create sync branch
-        env:
-          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git checkout -b "sync/${MERGE_COMMIT}"
-          git push origin "sync/${MERGE_COMMIT}"
-
-          echo "Created branch sync/${MERGE_COMMIT}"
-
-      - name: Remove commit from master
-        env:
-          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
-        run: |
-          git checkout master
-          git reset --hard HEAD~1
-          git push origin master --force
-
-          echo "Removed commit ${MERGE_COMMIT} from master"
 
       - name: Clone upstream Mercurial repo
         run: |
           hg clone https://foss.heptapod.net/zandronum/zandronum-stable upstream-hg
 
-      - name: Export and apply commit to Mercurial
-        env:
-          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
+      - name: Apply changes to Mercurial
         run: |
-          git checkout "sync/${MERGE_COMMIT}"
+          HEAD_SHA=$(git rev-parse HEAD)
 
-          # Get author info from the commit
-          AUTHOR_NAME=$(git log -1 ${MERGE_COMMIT} --format='%an')
-          AUTHOR_EMAIL=$(git log -1 ${MERGE_COMMIT} --format='%ae')
+          # Get author info from the head commit
+          AUTHOR_NAME=$(git log -1 --format='%an')
+          AUTHOR_EMAIL=$(git log -1 --format='%ae')
+          COMMIT_MSG=$(git log -1 --format='%B')
 
-          # Export the merge commit as a patch
-          git format-patch -1 --stdout ${MERGE_COMMIT} > /tmp/patch.patch
+          # Get the merge base with master to create the diff
+          MERGE_BASE=$(git merge-base origin/master HEAD)
+          git diff ${MERGE_BASE} HEAD > /tmp/changes.patch
 
           cd upstream-hg
 
@@ -79,14 +46,26 @@ jobs:
           echo "[ui]" > ~/.hgrc
           echo "username = ${AUTHOR_NAME} <${AUTHOR_EMAIL}>" >> ~/.hgrc
 
-          # Import the patch (includes commit message)
-          hg import /tmp/patch.patch || {
-            echo "Failed to apply patch"
-            exit 1
-          }
+          # Apply the patch
+          if [ -s /tmp/changes.patch ]; then
+            patch -p1 < /tmp/changes.patch || {
+              echo "Failed to apply patch"
+              cat /tmp/changes.patch
+              exit 1
+            }
 
-          echo "Mercurial commit created:"
-          hg log -l 1
+            # Add any new files, remove deleted files
+            hg addremove
+
+            # Commit with the original message
+            hg commit -m "${COMMIT_MSG}"
+
+            echo "Mercurial commit created:"
+            hg log -l 1
+          else
+            echo "No changes to sync"
+            exit 0
+          fi
 
       - name: Push to Mercurial
         env:
@@ -107,21 +86,7 @@ jobs:
 
           echo "Successfully pushed to Mercurial!"
 
-      - name: Delete sync branch on success
-        if: success()
-        env:
-          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
+      - name: Delete sync branch
         run: |
-          git push origin --delete "sync/${MERGE_COMMIT}"
-          echo "Deleted sync/${MERGE_COMMIT} branch"
-
-      - name: Restore commit to master on failure
-        if: failure()
-        env:
-          MERGE_COMMIT: ${{ steps.commit_info.outputs.merge_commit }}
-        run: |
-          git checkout master
-          git reset --hard ${MERGE_COMMIT}
-          git push origin master --force
-
-          echo "Restored commit ${MERGE_COMMIT} to master due to failure"
+          git push origin --delete "${GITHUB_REF_NAME}"
+          echo "Deleted branch ${GITHUB_REF_NAME}"
