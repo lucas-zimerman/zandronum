@@ -12,7 +12,7 @@ jobs:
   create-sync-branch:
     if: |
       github.event.pull_request.merged == false &&
-      contains(github.event.pull_request.labels.*.name, 'mercurial-label') &&
+      contains(github.event.pull_request.labels.*.name, 'mercurial-merge') &&
       !contains(github.event.pull_request.labels.*.name, 'github-only')
     runs-on: ubuntu-latest
 
@@ -36,3 +36,4 @@ jobs:
           git push origin "${SYNC_BRANCH}"
 
           echo "Created branch ${SYNC_BRANCH}"
+
