@@ -41,15 +41,18 @@ jobs:
           cd hg-temp-git
           git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git fetch origin
-          git checkout -b mercurial-sync origin/mercurial-sync
           cd ..
           # Clone fast-export and run conversion
           git clone https://github.com/frej/fast-export.git
           cd hg-temp-git
-          # Restore conversion state from mercurial-sync-meta branch
-          git show origin/mercurial-sync-meta:hg2git-marks > .git/hg2git-marks 2>/dev/null || true
-          git show origin/mercurial-sync-meta:hg2git-state > .git/hg2git-state 2>/dev/null || true
-          git show origin/mercurial-sync-meta:hg2git-mapping > .git/hg2git-mapping 2>/dev/null || true
+          # Restore conversion state from mercurial-sync-meta branch (if exists)
+          # This enables incremental conversion by telling hg-fast-export which commits were already converted
+          if git show origin/mercurial-sync-meta:hg2git-marks > .git/hg2git-marks 2>/dev/null && \
+             git show origin/mercurial-sync-meta:hg2git-state > .git/hg2git-state 2>/dev/null && \
+             git show origin/mercurial-sync-meta:hg2git-mapping > .git/hg2git-mapping 2>/dev/null; then
+            # State exists, checkout the branch for incremental update
+            git checkout -b mercurial-sync origin/mercurial-sync
+          fi
           ../fast-export/hg-fast-export.sh -r ../upstream-hg -M mercurial-sync --force
 
       - name: Optimize Git repository
