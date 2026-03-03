@@ -46,6 +46,10 @@ jobs:
           # Clone fast-export and run conversion
           git clone https://github.com/frej/fast-export.git
           cd hg-temp-git
+          # Restore conversion state from mercurial-sync-meta branch
+          git show origin/mercurial-sync-meta:hg2git-marks > .git/hg2git-marks 2>/dev/null || true
+          git show origin/mercurial-sync-meta:hg2git-state > .git/hg2git-state 2>/dev/null || true
+          git show origin/mercurial-sync-meta:hg2git-mapping > .git/hg2git-mapping 2>/dev/null || true
           ../fast-export/hg-fast-export.sh -r ../upstream-hg --force
 
       - name: Optimize Git repository
@@ -57,3 +61,16 @@ jobs:
         run: |
           cd hg-temp-git
           git push origin mercurial-sync --force
+
+      - name: Save conversion state
+        run: |
+          cd hg-temp-git
+          git fetch origin mercurial-sync-meta || true
+          git checkout --orphan temp-meta
+          git rm -rf . 2>/dev/null || true
+          cp .git/hg2git-marks . 2>/dev/null || true
+          cp .git/hg2git-state . 2>/dev/null || true
+          cp .git/hg2git-mapping . 2>/dev/null || true
+          git add hg2git-marks hg2git-state hg2git-mapping 2>/dev/null || true
+          git commit -m "Update conversion state" || true
+          git push origin temp-meta:mercurial-sync-meta --force
