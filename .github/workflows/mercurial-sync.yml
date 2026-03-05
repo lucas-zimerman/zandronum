@@ -47,16 +47,24 @@ jobs:
           cd hg-temp-git
           # Restore conversion state from mercurial-sync-meta branch (if exists)
           # This enables incremental conversion by telling hg-fast-export which commits were already converted
-          if git show origin/mercurial-sync-meta:hg2git-marks > .git/hg2git-marks 2>/dev/null && \
-             git show origin/mercurial-sync-meta:hg2git-state > .git/hg2git-state 2>/dev/null && \
-             git show origin/mercurial-sync-meta:hg2git-mapping > .git/hg2git-mapping 2>/dev/null && \
-             git show origin/mercurial-sync-meta:hg2git-heads > .git/hg2git-heads 2>/dev/null; then
-            # State exists, checkout the branch for incremental update
+          # First check if all state files exist before attempting restore
+          if git show origin/mercurial-sync-meta:hg2git-heads > /dev/null 2>&1 && \
+             git show origin/mercurial-sync-meta:hg2git-marks > /dev/null 2>&1 && \
+             git show origin/mercurial-sync-meta:hg2git-state > /dev/null 2>&1 && \
+             git show origin/mercurial-sync-meta:hg2git-mapping > /dev/null 2>&1; then
+            # All state files exist, restore them
+            git show origin/mercurial-sync-meta:hg2git-marks > .git/hg2git-marks
+            git show origin/mercurial-sync-meta:hg2git-state > .git/hg2git-state
+            git show origin/mercurial-sync-meta:hg2git-mapping > .git/hg2git-mapping
+            git show origin/mercurial-sync-meta:hg2git-heads > .git/hg2git-heads
+            # Checkout the branch for incremental update
             git checkout -b mercurial-sync origin/mercurial-sync
           else
-            # No complete state found, remove existing branch refs to allow fresh conversion
+            # No complete state found, do fresh conversion
+            # Remove any existing branch refs and state files
             git branch -D mercurial-sync 2>/dev/null || true
             git update-ref -d refs/remotes/origin/mercurial-sync 2>/dev/null || true
+            rm -f .git/hg2git-marks .git/hg2git-state .git/hg2git-mapping .git/hg2git-heads
           fi
           ../fast-export/hg-fast-export.sh -r ../upstream-hg -M mercurial-sync --force
 
