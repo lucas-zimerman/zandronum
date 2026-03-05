@@ -49,9 +49,14 @@ jobs:
           # This enables incremental conversion by telling hg-fast-export which commits were already converted
           if git show origin/mercurial-sync-meta:hg2git-marks > .git/hg2git-marks 2>/dev/null && \
              git show origin/mercurial-sync-meta:hg2git-state > .git/hg2git-state 2>/dev/null && \
-             git show origin/mercurial-sync-meta:hg2git-mapping > .git/hg2git-mapping 2>/dev/null; then
+             git show origin/mercurial-sync-meta:hg2git-mapping > .git/hg2git-mapping 2>/dev/null && \
+             git show origin/mercurial-sync-meta:hg2git-heads > .git/hg2git-heads 2>/dev/null; then
             # State exists, checkout the branch for incremental update
             git checkout -b mercurial-sync origin/mercurial-sync
+          else
+            # No complete state found, remove existing branch refs to allow fresh conversion
+            git branch -D mercurial-sync 2>/dev/null || true
+            git update-ref -d refs/remotes/origin/mercurial-sync 2>/dev/null || true
           fi
           ../fast-export/hg-fast-export.sh -r ../upstream-hg -M mercurial-sync --force
 
@@ -76,6 +81,7 @@ jobs:
           cp .git/hg2git-marks . 2>/dev/null || true
           cp .git/hg2git-state . 2>/dev/null || true
           cp .git/hg2git-mapping . 2>/dev/null || true
-          git add hg2git-marks hg2git-state hg2git-mapping 2>/dev/null || true
+          cp .git/hg2git-heads . 2>/dev/null || true
+          git add hg2git-marks hg2git-state hg2git-mapping hg2git-heads 2>/dev/null || true
           git commit -m "Update conversion state" || true
           git push origin temp-meta:mercurial-sync-meta --force
