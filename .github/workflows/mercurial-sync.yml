@@ -35,6 +35,10 @@ jobs:
           rm -rf upstream-hg
           hg clone https://foss.heptapod.net/zandronum/zandronum-stable upstream-hg
 
+      - name: Log Mercurial Heads
+        working-directory: upstream-hg
+        run: hg heads -c
+
       - name: Fetch previous Git commits
         run: |
           git fetch origin mercurial-sync

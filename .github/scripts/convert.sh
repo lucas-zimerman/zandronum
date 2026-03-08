@@ -42,15 +42,9 @@ if [[ -n "$MAX_REV" ]]; then
 fi
 
 # Run conversion
-python3 "${FAST_EXPORT_PATH}/hg-fast-export.py" \
+
+"${FAST_EXPORT_PATH}/hg-fast-export.sh" \
     -r "$HG_REPO_PATH" \
     -M mercurial-sync \
-    --force \
-    --marks .git/hg2git-marks \
-    --mapping .git/hg2git-mapping \
-    --heads .git/hg2git-heads \
-    --status .git/hg2git-state \
-    $MAX_REV_ARG \
-    | echo "test" \
-    | git fast-import --import-marks-if-exists=.git/hg2git-marks --export-marks=.git/hg2git-marks --force
-    # | python3 "$FILTER_SCRIPT" \
+    --ignore-unnamed-heads \
+    --force
