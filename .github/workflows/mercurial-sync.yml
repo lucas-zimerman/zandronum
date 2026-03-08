@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 0 */2 * *'
   workflow_dispatch:
+    inputs:
+      max_revision:
+        description: 'Max Mercurial revision to sync (e.g., 12000). Leave empty for latest.'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -19,19 +24,11 @@ jobs:
           sudo apt install -y mercurial git python3 python3-pip
           pip3 install dulwich
 
-      - name: Checkout default branch (for scripts)
-        uses: actions/checkout@v3
-        with:
-          ref: master
-          fetch-depth: 1
-          path: scripts-src
-
       - name: Checkout mercurial-sync branch
         uses: actions/checkout@v3
         with:
           ref: mercurial-sync
           fetch-depth: 0
-          path: main
 
       - name: Clone upstream Mercurial repo
         run: |
@@ -40,7 +37,6 @@ jobs:
 
       - name: Fetch previous Git commits
         run: |
-          cd main
           git fetch origin mercurial-sync
           git checkout mercurial-sync
 
@@ -71,9 +67,32 @@ jobs:
             rm -f .git/hg2git-marks .git/hg2git-state .git/hg2git-mapping .git/hg2git-heads
           fi
           # Some ST_* tags (0.97d-beta4.2 onwards) point to commits on unnamed Mercurial heads
-          # that don't get converted. We filter these tags out using .github/scripts/filter-tags.py
+          # that don't get converted. Create inline filter script.
+          cat > /tmp/filter-tags.py << 'FILTER_EOF'
+          import sys, re
+          content = sys.stdin.buffer.read().decode('utf-8', errors='replace')
+          skip_tags = [
+              'ST_0.97d-beta4.2', 'ST_0.97d-beta4.3', 'ST_0.97d-RC9', 'ST_0.97d-RC10',
+              'ST_0.97d', 'ST_0.97d2-RC2', 'ST_0.97d2-RC3', 'ST_0.97d2-RC6', 'ST_0.97d2',
+              'ST_0.97d3-RC1', 'ST_0.97d3-RC2', 'ST_0.97d3', 'ST_0.97d3-security-update-1',
+              'ST_0.97d4', 'ST_0.97d5', 'ST_0.97d5-security-update-1'
+          ]
+          for tag in skip_tags:
+              pattern = rf'tag {re.escape(tag)}\nfrom [^\n]+\ntagger [^\n]+\ndata (\d+)\n'
+              match = re.search(pattern, content)
+              while match:
+                  start, end = match.start(), match.end() + int(match.group(1))
+                  content = content[:start] + content[end:]
+                  match = re.search(pattern, content)
+          sys.stdout.buffer.write(content.encode('utf-8'))
+          FILTER_EOF
 
           # Run conversion, filter problematic tags, and import
+          MAX_REV_ARG=""
+          if [[ -n "${{ github.event.inputs.max_revision }}" ]]; then
+            MAX_REV_ARG="--max ${{ github.event.inputs.max_revision }}"
+            echo "Limiting sync to revision ${{ github.event.inputs.max_revision }}"
+          fi
           python3 ../fast-export/hg-fast-export.py \
             -r ../upstream-hg \
             -M mercurial-sync \
@@ -82,7 +101,8 @@ jobs:
             --mapping .git/hg2git-mapping \
             --heads .git/hg2git-heads \
             --status .git/hg2git-state \
-            | python3 $GITHUB_WORKSPACE/scripts-src/.github/scripts/filter-tags.py \
+            $MAX_REV_ARG \
+            | python3 /tmp/filter-tags.py \
             | git fast-import --import-marks-if-exists=.git/hg2git-marks --export-marks=.git/hg2git-marks --force
 
       - name: Optimize Git repository
