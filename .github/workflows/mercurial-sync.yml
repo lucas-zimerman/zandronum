@@ -46,53 +46,25 @@ jobs:
           git clone https://github.com/frej/fast-export.git
           cd hg-temp-git
           # Restore conversion state from mercurial-sync-meta branch (if exists)
-          # This enables incremental conversion by telling hg-fast-export which commits were already converted
-          # First check if all state files exist before attempting restore
           if git show origin/mercurial-sync-meta:hg2git-heads > /dev/null 2>&1 && \
              git show origin/mercurial-sync-meta:hg2git-marks > /dev/null 2>&1 && \
              git show origin/mercurial-sync-meta:hg2git-state > /dev/null 2>&1 && \
              git show origin/mercurial-sync-meta:hg2git-mapping > /dev/null 2>&1; then
-            # All state files exist, restore them
             git show origin/mercurial-sync-meta:hg2git-marks > .git/hg2git-marks
             git show origin/mercurial-sync-meta:hg2git-state > .git/hg2git-state
             git show origin/mercurial-sync-meta:hg2git-mapping > .git/hg2git-mapping
             git show origin/mercurial-sync-meta:hg2git-heads > .git/hg2git-heads
-            # Checkout the branch for incremental update
             git checkout -b mercurial-sync origin/mercurial-sync
           else
-            # No complete state found, do fresh conversion
-            # Remove any existing branch refs and state files
+            # No state found, do fresh conversion
             git branch -D mercurial-sync 2>/dev/null || true
             git update-ref -d refs/remotes/origin/mercurial-sync 2>/dev/null || true
             rm -f .git/hg2git-marks .git/hg2git-state .git/hg2git-mapping .git/hg2git-heads
           fi
           # Some ST_* tags (0.97d-beta4.2 onwards) point to commits on unnamed Mercurial heads
-          # that don't get converted. We filter these tags out of the fast-import stream.
-          # The existing ZA_* and early ST_* tags are preserved from previous syncs.
+          # that don't get converted. We filter these tags out using .github/scripts/filter-tags.py
 
-          # Create a filter script to remove problematic tag commands
-          cat > /tmp/filter-tags.py << 'FILTER_EOF'
-          import sys
-          import re
-
-          content = sys.stdin.read()
-
-          # Tags pointing to commits on unnamed heads (won't exist after conversion)
-          skip_tags = [
-              'ST_0.97d-beta4.2', 'ST_0.97d-beta4.3', 'ST_0.97d-RC9', 'ST_0.97d-RC10',
-              'ST_0.97d', 'ST_0.97d2-RC2', 'ST_0.97d2-RC3', 'ST_0.97d2-RC6', 'ST_0.97d2',
-              'ST_0.97d3-RC1', 'ST_0.97d3-RC2', 'ST_0.97d3', 'ST_0.97d3-security-update-1',
-              'ST_0.97d4', 'ST_0.97d5', 'ST_0.97d5-security-update-1'
-          ]
-
-          for tag in skip_tags:
-              pattern = rf'tag {re.escape(tag)}\nfrom [^\n]+\ntagger [^\n]+\ndata \d+\n[^\n]*\n?'
-              content = re.sub(pattern, '', content)
-
-          sys.stdout.write(content)
-          FILTER_EOF
-
-          # Run conversion, filter tags, and import
+          # Run conversion, filter problematic tags, and import
           python3 ../fast-export/hg-fast-export.py \
             -r ../upstream-hg \
             -M mercurial-sync \
@@ -101,8 +73,8 @@ jobs:
             --mapping .git/hg2git-mapping \
             --heads .git/hg2git-heads \
             --status .git/hg2git-state \
-            | python3 /tmp/filter-tags.py \
-            | git fast-import --import-marks=.git/hg2git-marks --export-marks=.git/hg2git-marks --force
+            | python3 $GITHUB_WORKSPACE/.github/scripts/filter-tags.py \
+            | git fast-import --import-marks-if-exists=.git/hg2git-marks --export-marks=.git/hg2git-marks --force
 
       - name: Optimize Git repository
         run: |
@@ -128,4 +100,4 @@ jobs:
           cp .git/hg2git-heads . 2>/dev/null || true
           git add hg2git-marks hg2git-state hg2git-mapping hg2git-heads 2>/dev/null || true
           git commit -m "Update conversion state" || true
-          git push origin temp-meta:mercurial-sync-meta --force
+          git push origin temp-meta:mercurial-sync-meta --force || true
