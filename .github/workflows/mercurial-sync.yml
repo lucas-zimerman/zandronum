@@ -64,13 +64,15 @@ jobs:
              git show origin/mercurial-sync-meta:hg2git-marks > /dev/null 2>&1 && \
              git show origin/mercurial-sync-meta:hg2git-state > /dev/null 2>&1 && \
              git show origin/mercurial-sync-meta:hg2git-mapping > /dev/null 2>&1; then
-            git show origin/mercurial-sync-meta:hg2git-marks > .git/hg2git-marks
-            git show origin/mercurial-sync-meta:hg2git-state > .git/hg2git-state
-            git show origin/mercurial-sync-meta:hg2git-mapping > .git/hg2git-mapping
-            git show origin/mercurial-sync-meta:hg2git-heads > .git/hg2git-heads
-            git checkout -b mercurial-sync origin/mercurial-sync
+              echo "Cloning sync-meta"
+              git show origin/mercurial-sync-meta:hg2git-marks > .git/hg2git-marks
+              git show origin/mercurial-sync-meta:hg2git-state > .git/hg2git-state
+              git show origin/mercurial-sync-meta:hg2git-mapping > .git/hg2git-mapping
+              git show origin/mercurial-sync-meta:hg2git-heads > .git/hg2git-heads
+              git checkout -b mercurial-sync origin/mercurial-sync
           else
             # No state found, do fresh conversion
+            echo "Creating fresh sync meta"
             git branch -D mercurial-sync 2>/dev/null || true
             git update-ref -d refs/remotes/origin/mercurial-sync 2>/dev/null || true
             rm -f .git/hg2git-marks .git/hg2git-state .git/hg2git-mapping .git/hg2git-heads
