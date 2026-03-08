@@ -51,5 +51,6 @@ python3 "${FAST_EXPORT_PATH}/hg-fast-export.py" \
     --heads .git/hg2git-heads \
     --status .git/hg2git-state \
     $MAX_REV_ARG \
-    # | python3 "$FILTER_SCRIPT" \
+    | echo "test" \
     | git fast-import --import-marks-if-exists=.git/hg2git-marks --export-marks=.git/hg2git-marks --force
+    # | python3 "$FILTER_SCRIPT" \
