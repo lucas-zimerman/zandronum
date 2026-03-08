@@ -60,6 +60,7 @@ jobs:
       - name: Create or Restore conversion state from mercurial-sync-meta branch
         working-directory: hg-temp-git
         run: |
+          git fetch origin
           if git show origin/mercurial-sync-meta:hg2git-heads > /dev/null 2>&1 && \
              git show origin/mercurial-sync-meta:hg2git-marks > /dev/null 2>&1 && \
              git show origin/mercurial-sync-meta:hg2git-state > /dev/null 2>&1 && \
@@ -84,7 +85,6 @@ jobs:
         env:
           FILTER_SCRIPT: ${{ github.workspace }}/scripts-src/.github/scripts/filter-tags.py
         run: |
-          git fetch origin
           MAX_REV_ARG=""
           if [[ -n "${{ github.event.inputs.max_revision }}" ]]; then
             MAX_REV_ARG="--max-rev ${{ github.event.inputs.max_revision }}"
