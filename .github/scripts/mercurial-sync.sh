@@ -3,19 +3,38 @@
 # Local test script for Mercurial to Git sync
 #
 # Usage:
-#   ./mercurial-sync.sh [--dry-run]
+#   ./mercurial-sync.sh [--dry-run] [--max-rev <revision>]
 #
 # Options:
-#   --dry-run    Only run conversion, don't push to remote
+#   --dry-run         Only run conversion, don't push to remote
+#   --max-rev <rev>   Limit sync to specific Mercurial revision number
 #
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORK_DIR="${SCRIPT_DIR}/../../.."
+WORK_DIR="${SCRIPT_DIR}/../.."
 DRY_RUN=false
+MAX_REV=""
 
-if [[ "$1" == "--dry-run" ]]; then
-    DRY_RUN=true
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --max-rev)
+            MAX_REV="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+if [[ "$DRY_RUN" == "true" ]]; then
     echo "Running in dry-run mode (no push)"
 fi
 
@@ -68,16 +87,12 @@ else
 fi
 
 echo "=== Step 5: Run conversion ==="
-python3 ../fast-export/hg-fast-export.py \
-    -r ../upstream-hg \
-    -M mercurial-sync \
-    --force \
-    --marks .git/hg2git-marks \
-    --mapping .git/hg2git-mapping \
-    --heads .git/hg2git-heads \
-    --status .git/hg2git-state \
-    | python3 "$SCRIPT_DIR/filter-tags.py" \
-    | git fast-import --import-marks-if-exists=.git/hg2git-marks --export-marks=.git/hg2git-marks --force
+MAX_REV_ARG=""
+if [[ -n "$MAX_REV" ]]; then
+    MAX_REV_ARG="--max-rev $MAX_REV"
+fi
+
+bash "$SCRIPT_DIR/convert.sh" $MAX_REV_ARG
 
 echo "=== Step 6: Optimize repository ==="
 git gc --aggressive --prune=now
