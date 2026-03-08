@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       max_revision:
-        description: 'Max Mercurial revision to sync (e.g., 12000). Leave empty for latest.'
+        description: 'Max Mercurial revision number to sync (e.g., 12000, not the hash). Leave empty for latest.'
         required: false
         default: ''
 
@@ -40,17 +40,26 @@ jobs:
           git fetch origin mercurial-sync
           git checkout mercurial-sync
 
-      - name: Convert Mercurial to Git
+      - name: Initialize git project
+        run: git init hg-temp-git
+
+      - name: Add Github as username
+        working-directory: hg-temp-git
+        run: git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+
+      - name: Clone Mercurial FastExport
+        run: git clone https://github.com/frej/fast-export.git
+
+      - name: Checkout scripts from master
+        uses: actions/checkout@v3
+        with:
+          ref: master
+          sparse-checkout: .github/scripts
+          path: scripts-src
+
+      - name: Create or Restore conversion state from mercurial-sync-meta branch
+        working-directory: hg-temp-git
         run: |
-          git init hg-temp-git
-          cd hg-temp-git
-          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          git fetch origin
-          cd ..
-          # Clone fast-export and run conversion
-          git clone https://github.com/frej/fast-export.git
-          cd hg-temp-git
-          # Restore conversion state from mercurial-sync-meta branch (if exists)
           if git show origin/mercurial-sync-meta:hg2git-heads > /dev/null 2>&1 && \
              git show origin/mercurial-sync-meta:hg2git-marks > /dev/null 2>&1 && \
              git show origin/mercurial-sync-meta:hg2git-state > /dev/null 2>&1 && \
@@ -66,44 +75,19 @@ jobs:
             git update-ref -d refs/remotes/origin/mercurial-sync 2>/dev/null || true
             rm -f .git/hg2git-marks .git/hg2git-state .git/hg2git-mapping .git/hg2git-heads
           fi
-          # Some ST_* tags (0.97d-beta4.2 onwards) point to commits on unnamed Mercurial heads
-          # that don't get converted. Create inline filter script.
-          cat > /tmp/filter-tags.py << 'FILTER_EOF'
-          import sys, re
-          content = sys.stdin.buffer.read().decode('utf-8', errors='replace')
-          skip_tags = [
-              'ST_0.97d-beta4.2', 'ST_0.97d-beta4.3', 'ST_0.97d-RC9', 'ST_0.97d-RC10',
-              'ST_0.97d', 'ST_0.97d2-RC2', 'ST_0.97d2-RC3', 'ST_0.97d2-RC6', 'ST_0.97d2',
-              'ST_0.97d3-RC1', 'ST_0.97d3-RC2', 'ST_0.97d3', 'ST_0.97d3-security-update-1',
-              'ST_0.97d4', 'ST_0.97d5', 'ST_0.97d5-security-update-1'
-          ]
-          for tag in skip_tags:
-              pattern = rf'tag {re.escape(tag)}\nfrom [^\n]+\ntagger [^\n]+\ndata (\d+)\n'
-              match = re.search(pattern, content)
-              while match:
-                  start, end = match.start(), match.end() + int(match.group(1))
-                  content = content[:start] + content[end:]
-                  match = re.search(pattern, content)
-          sys.stdout.buffer.write(content.encode('utf-8'))
-          FILTER_EOF
 
-          # Run conversion, filter problematic tags, and import
+
+      - name: Convert Mercurial to Git
+        working-directory: hg-temp-git
+        env:
+          FILTER_SCRIPT: ${{ github.workspace }}/scripts-src/.github/scripts/filter-tags.py
+        run: |
+          git fetch origin
           MAX_REV_ARG=""
           if [[ -n "${{ github.event.inputs.max_revision }}" ]]; then
-            MAX_REV_ARG="--max ${{ github.event.inputs.max_revision }}"
-            echo "Limiting sync to revision ${{ github.event.inputs.max_revision }}"
+            MAX_REV_ARG="--max-rev ${{ github.event.inputs.max_revision }}"
           fi
-          python3 ../fast-export/hg-fast-export.py \
-            -r ../upstream-hg \
-            -M mercurial-sync \
-            --force \
-            --marks .git/hg2git-marks \
-            --mapping .git/hg2git-mapping \
-            --heads .git/hg2git-heads \
-            --status .git/hg2git-state \
-            $MAX_REV_ARG \
-            | python3 /tmp/filter-tags.py \
-            | git fast-import --import-marks-if-exists=.git/hg2git-marks --export-marks=.git/hg2git-marks --force
+          bash ${{ github.workspace }}/scripts-src/.github/scripts/convert.sh $MAX_REV_ARG
 
       - name: Optimize Git repository
         run: |
